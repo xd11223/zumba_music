@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"html"
 	"log"
 	"strings"
 
@@ -84,11 +85,14 @@ func (b *ZumbaBot) handleMessage(msg *tgbotapi.Message) {
 	case "📊 目前 Live 歌單":
 		b.cmdStatus(msg.Chat.ID, msg.From.ID)
 		return
-	case "📚 瀏覽教材":
-		b.cmdListPrograms(msg.Chat.ID)
+	case "📘 瀏覽 ZIN 教材", "📚 瀏覽 ZIN 教材":
+		b.cmdListPrograms(msg.Chat.ID, "ZIN")
 		return
-	case "📚 瀏覽 ZIN 教材":
-		b.cmdListZin(msg.Chat.ID)
+	case "📙 瀏覽 Mega Mix 教材":
+		b.cmdListPrograms(msg.Chat.ID, "MM")
+		return
+	case "📚 瀏覽教材":
+		b.cmdListPrograms(msg.Chat.ID, "")
 		return
 	case "ℹ️ 使用說明":
 		b.cmdHelp(msg.Chat.ID)
@@ -113,11 +117,13 @@ func (b *ZumbaBot) handleMessage(msg *tgbotapi.Message) {
 		case "query_zin":
 			b.cmdQueryZin(msg.Chat.ID, msg.From.ID, msg.CommandArguments())
 		case "list_zin":
-			b.cmdListZin(msg.Chat.ID)
+			b.cmdListPrograms(msg.Chat.ID, "ZIN")
+		case "list_mm":
+			b.cmdListPrograms(msg.Chat.ID, "MM")
 		case "query_program":
 			b.cmdQueryProgram(msg.Chat.ID, msg.From.ID, msg.CommandArguments())
 		case "list_programs":
-			b.cmdListPrograms(msg.Chat.ID)
+			b.cmdListPrograms(msg.Chat.ID, "")
 		default:
 			reply := tgbotapi.NewMessage(msg.Chat.ID, "❌ 未知的指令，請輸入 /help 查看使用說明。")
 			b.send(reply)
@@ -150,20 +156,18 @@ func (b *ZumbaBot) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 
 	data := cb.Data
 
-	// 處理 ZIN 查詢的 Callback：格式為 "query_zin:<ZIN名稱>"
+	// 舊版 ZIN 按鈕仍可能存在於 Telegram 對話中；統一導向新版教材資料。
 	if strings.HasPrefix(data, "query_zin:") {
-		albumName := strings.TrimPrefix(data, "query_zin:")
+		issue := normalizeZinIssue(strings.TrimPrefix(data, "query_zin:"))
 
-		// 呼叫 ZIN 查詢邏輯，帶入點擊使用者的 ID
-		replyText := b.formatQueryZinResult(cb.From.ID, albumName)
+		replyText := b.formatQueryProgramResult(cb.From.ID, "ZIN", issue)
 
 		// 發送詳細資料回對話框
-		msg := tgbotapi.NewMessage(cb.Message.Chat.ID, replyText)
-		msg.ParseMode = tgbotapi.ModeMarkdown
+		msg := b.newProgramResultMessage(cb.Message.Chat.ID, replyText)
 		b.send(msg)
 
 		// 回應 Telegram 完成 Callback 動態
-		callbackResp := tgbotapi.NewCallback(cb.ID, fmt.Sprintf("已查詢 %s", albumName))
+		callbackResp := tgbotapi.NewCallback(cb.ID, fmt.Sprintf("已查詢 ZIN %s", issue))
 		if _, err := b.api.Request(callbackResp); err != nil {
 			log.Printf("Failed to answer callback query: %v", err)
 		}
@@ -175,12 +179,21 @@ func (b *ZumbaBot) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 		parts := strings.SplitN(strings.TrimPrefix(data, "query_program:"), ":", 2)
 		if len(parts) == 2 {
 			replyText := b.formatQueryProgramResult(cb.From.ID, parts[0], parts[1])
-			msg := tgbotapi.NewMessage(cb.Message.Chat.ID, replyText)
+			msg := b.newProgramResultMessage(cb.Message.Chat.ID, replyText)
 			b.send(msg)
 			callbackResp := tgbotapi.NewCallback(cb.ID, fmt.Sprintf("已查詢 %s %s", parts[0], parts[1]))
 			if _, err := b.api.Request(callbackResp); err != nil {
 				log.Printf("Failed to answer callback query: %v", err)
 			}
+		}
+		return
+	}
+
+	if strings.HasPrefix(data, "list_program:") {
+		programType := strings.TrimPrefix(data, "list_program:")
+		b.cmdListPrograms(cb.Message.Chat.ID, programType)
+		if _, err := b.api.Request(tgbotapi.NewCallback(cb.ID, "已開啟教材列表")); err != nil {
+			log.Printf("Failed to answer callback query: %v", err)
 		}
 	}
 }
@@ -228,10 +241,8 @@ func (b *ZumbaBot) cmdHelp(chatID int64) {
    ` + "```" + `
 4️⃣ *匯入圖片辨識教材格式：*
    可直接貼上以 ` + "`FORMAT_VERSION: 1`" + ` 開頭的完整文字，或使用 */add_mm*、*/add_program*。
-5️⃣ *瀏覽及查詢教材：*
-   輸入 */list_programs*，或輸入 */query_program MM 114*。
-6️⃣ *舊版 ZIN 查詢：*
-   輸入 */query_zin <ZIN名稱>*，或輸入 */list_zin*。`
+5️⃣ *瀏覽及查詢新版教材：*
+   輸入 */list_zin*、*/list_mm*，或輸入 */query_program ZIN 123*。`
 
 	msg := tgbotapi.NewMessage(chatID, helpText)
 	msg.ParseMode = tgbotapi.ModeMarkdown
@@ -240,7 +251,10 @@ func (b *ZumbaBot) cmdHelp(chatID int64) {
 	keyboard := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📊 目前 Live 歌單"),
-			tgbotapi.NewKeyboardButton("📚 瀏覽教材"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("📘 瀏覽 ZIN 教材"),
+			tgbotapi.NewKeyboardButton("📙 瀏覽 Mega Mix 教材"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("ℹ️ 使用說明"),
@@ -392,22 +406,24 @@ func (b *ZumbaBot) cmdAddProgram(chatID int64, rawText, expectedType string) {
 	b.send(tgbotapi.NewMessage(chatID, replyText))
 }
 
-// cmdListPrograms 列出所有以固定格式匯入的 ZIN／MM 教材。
-func (b *ZumbaBot) cmdListPrograms(chatID int64) {
+// cmdListPrograms 列出以固定格式匯入的教材；programType 留空時列出全部。
+func (b *ZumbaBot) cmdListPrograms(chatID int64, programType string) {
 	releases, err := b.db.ListProgramReleases()
 	if err != nil {
 		b.send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ 獲取教材列表失敗：%v", err)))
 		return
 	}
-	if len(releases) == 0 {
-		b.send(tgbotapi.NewMessage(chatID, "📚 目前沒有以固定格式匯入的教材。"))
-		return
-	}
-
 	var sb strings.Builder
-	sb.WriteString("📚 已記錄的 Zumba 教材：\n\n")
+	if programType == "" {
+		sb.WriteString("📚 已記錄的 Zumba 教材：\n\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("📚 已記錄的 %s 教材：\n\n", programType))
+	}
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for _, release := range releases {
+		if programType != "" && release.Type != programType {
+			continue
+		}
 		month := release.ReleaseMonth
 		if month == "" {
 			month = "月份未提供"
@@ -417,6 +433,14 @@ func (b *ZumbaBot) cmdListPrograms(chatID int64) {
 		label := fmt.Sprintf("%s %s", release.Type, release.Issue)
 		callback := fmt.Sprintf("query_program:%s:%s", release.Type, release.Issue)
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(label, callback)))
+	}
+	if len(rows) == 0 {
+		label := ""
+		if programType != "" {
+			label = programType + " "
+		}
+		b.send(tgbotapi.NewMessage(chatID, fmt.Sprintf("📚 目前沒有已匯入的 %s教材。", label)))
+		return
 	}
 
 	msg := tgbotapi.NewMessage(chatID, sb.String())
@@ -431,7 +455,19 @@ func (b *ZumbaBot) cmdQueryProgram(chatID, userID int64, arguments string) {
 		b.send(tgbotapi.NewMessage(chatID, "❌ 請使用：/query_program MM 114"))
 		return
 	}
-	b.send(tgbotapi.NewMessage(chatID, b.formatQueryProgramResult(userID, parts[0], parts[1])))
+	b.send(b.newProgramResultMessage(chatID, b.formatQueryProgramResult(userID, parts[0], parts[1])))
+}
+
+func (b *ZumbaBot) newProgramResultMessage(chatID int64, text string) tgbotapi.MessageConfig {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = tgbotapi.ModeHTML
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📘 瀏覽 ZIN 教材", "list_program:ZIN"),
+			tgbotapi.NewInlineKeyboardButtonData("📙 瀏覽 Mega Mix 教材", "list_program:MM"),
+		),
+	)
+	return msg
 }
 
 func (b *ZumbaBot) formatQueryProgramResult(userID int64, programType, issue string) string {
@@ -448,32 +484,36 @@ func (b *ZumbaBot) formatQueryProgramResult(userID int64, programType, issue str
 		month = "未提供"
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📖 %s %s — %s\n", result.Type, result.Issue, result.Title))
-	sb.WriteString(fmt.Sprintf("發行月份：%s\n歌曲數：%d 首\n\n", month, len(result.Tracks)))
+	sb.WriteString(fmt.Sprintf("📖 <b>%s %s — %s</b>\n", html.EscapeString(result.Type), html.EscapeString(result.Issue), html.EscapeString(result.Title)))
+	sb.WriteString(fmt.Sprintf("📅 發行月份：%s　🎵 歌曲數：%d 首\n\n", html.EscapeString(month), len(result.Tracks)))
 	for _, track := range result.Tracks {
-		status := "未使用"
+		status := "⬜ 未使用"
 		if track.Used {
-			status = "已使用"
+			status = "✅ 使用中"
 		}
-		sb.WriteString(fmt.Sprintf("%02d. %s [%s]\n", track.Sequence, track.DisplayName, status))
+		sb.WriteString(fmt.Sprintf("%02d. <b>%s</b>　%s\n", track.Sequence, html.EscapeString(track.DisplayName), status))
 		var metadata []string
 		if track.Artist != "" {
-			metadata = append(metadata, track.Artist)
+			metadata = append(metadata, "🎤 "+html.EscapeString(track.Artist))
 		}
 		if track.BPM > 0 {
-			metadata = append(metadata, fmt.Sprintf("%d BPM", track.BPM))
+			metadata = append(metadata, fmt.Sprintf("⚡ %d BPM", track.BPM))
 		}
 		if track.DurationSeconds > 0 {
-			metadata = append(metadata, formatDuration(track.DurationSeconds))
+			metadata = append(metadata, "⏱ "+formatDuration(track.DurationSeconds))
 		}
 		if track.Style != "" {
-			metadata = append(metadata, track.Style)
+			metadata = append(metadata, "🏷 "+html.EscapeString(track.Style))
 		}
 		if len(metadata) > 0 {
 			sb.WriteString("    " + strings.Join(metadata, " | ") + "\n")
 		}
 		if len(track.History) > 0 {
-			sb.WriteString("    使用時間：" + strings.Join(track.History, "、") + "\n")
+			history := make([]string, len(track.History))
+			for i, item := range track.History {
+				history[i] = html.EscapeString(item)
+			}
+			sb.WriteString("    🗓 使用時間：" + strings.Join(history, "、") + "\n")
 		}
 	}
 	return sb.String()
@@ -533,18 +573,27 @@ func (b *ZumbaBot) cmdListZin(chatID int64) {
 
 // cmdQueryZin 處理手動查詢特定 ZIN 教材
 func (b *ZumbaBot) cmdQueryZin(chatID int64, userID int64, arguments string) {
-	albumName := strings.TrimSpace(arguments)
-	if albumName == "" {
-		msg := tgbotapi.NewMessage(chatID, "❌ 請指定要查詢的教材名稱。例如：`/query_zin Zin123`")
+	issue := normalizeZinIssue(arguments)
+	if issue == "" {
+		msg := tgbotapi.NewMessage(chatID, "❌ 請指定期數。例如：`/query_zin 123` 或 `/query_program ZIN 123`")
 		msg.ParseMode = tgbotapi.ModeMarkdown
 		b.send(msg)
 		return
 	}
 
-	replyText := b.formatQueryZinResult(userID, albumName)
-	msg := tgbotapi.NewMessage(chatID, replyText)
-	msg.ParseMode = tgbotapi.ModeMarkdown
-	b.send(msg)
+	replyText := b.formatQueryProgramResult(userID, "ZIN", issue)
+	b.send(b.newProgramResultMessage(chatID, replyText))
+}
+
+// normalizeZinIssue 支援 123、ZIN 123 與舊按鈕使用的 Zin123 格式。
+func normalizeZinIssue(value string) string {
+	var digits strings.Builder
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	return digits.String()
 }
 
 // formatQueryZinResult 格式化特定 ZIN 專輯的使用狀態查詢結果 (對應特定使用者)

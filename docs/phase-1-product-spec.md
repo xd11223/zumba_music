@@ -1,6 +1,6 @@
 # Zumba Music Bot：第一階段產品規格與 Codex 交接紀錄
 
-> 最後更新：2026-08-15
+> 最後更新：2026-08-16
 > 文件用途：保存本專案經過 `grill-me` 討論後的產品決策、第一階段預期功能、目前實作進度與下一步。換一台電腦或開啟新的 Codex task 時，請先讀完本文件，再讀 `README.md`、`docs/glossary.md`、`docs/adr/` 與現有程式碼。
 > 重要：本文件同時記錄已完成的單人 MVP 與已確認、尚未實作的後續規格；請以各項目的勾選狀態判斷目前進度。
 
@@ -21,6 +21,8 @@
 - 支援 `program-import-v1` 固定格式直接貼入。
 - 支援 MM 教材建立、完整覆蓋、列表及按 `TYPE + ISSUE` 查詢。
 - 通用教材查詢會按教材順序顯示歌曲資料與個人 Live 使用歷史。
+- 教材瀏覽統一使用通用教材資料來源；ZIN 與 Mega Mix 各有獨立按鈕與清單。
+- 教材詳情以粗體歌曲名稱、狀態與欄位圖示呈現，並提供快速切換教材類型的按鈕。
 - SQLite 舊資料啟動時自動補上 Live `position`。
 
 目前 MVP 明確延後：
@@ -638,8 +640,10 @@ import_sessions
 - `/status` 查看個人 active Live 歌單。
 - `/update_live` 貼上完整歌單並立即比較、寫入。
 - `/add_zin` 匯入或覆蓋 ZIN 教材。
-- `/list_zin` 列出 ZIN 教材並提供 Inline Keyboard。
-- `/query_zin` 查詢個人對某期 ZIN 歌曲的使用歷史。
+- `/list_zin` 與舊 ZIN 按鈕都導向通用教材的 ZIN 清單與查詢。
+- `/list_mm` 列出通用教材中的 Mega Mix。
+- `/query_zin` 支援舊 `Zin123` 格式，但會查詢通用教材中的 `ZIN 123`。
+- 教材詳情使用粗體歌曲名稱、使用狀態與歌曲欄位圖示，並提供 ZIN／Mega Mix 快速瀏覽按鈕。
 - `ALLOWED_USERS` 白名單。
 - 每位 Telegram User ID 的 Live 資料隔離。
 - 歌名清理、標準化。
@@ -689,7 +693,8 @@ program_tracks
 - [ ] Telegram 日期選擇／批次日期調整。
 - [ ] 歷史日期衝突驗證。
 - [ ] 管理員與一般老師的不同鍵盤。
-- [x] `/add_mm`、`/list_programs`、`/query_program`。
+- [x] `/add_mm`、`/list_programs`、`/list_zin`、`/list_mm`、`/query_program`；教材瀏覽統一導向通用教材資料。
+- [x] 教材詳情卡片式呈現：粗體歌曲名稱、狀態／歌曲欄位圖示與 ZIN／Mega Mix 快速瀏覽按鈕。
 - [x] 教材瀏覽依首次匯入時間由新到舊排序。
 - [ ] `/my_account`。
 - [ ] 管理員共用資料操作紀錄。

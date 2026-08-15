@@ -42,3 +42,11 @@ func TestFormatDuration(t *testing.T) {
 		t.Fatalf("formatDuration(191) = %q, want 3:11", got)
 	}
 }
+
+func TestNormalizeZinIssue(t *testing.T) {
+	for _, input := range []string{"123", "ZIN 123", "Zin123"} {
+		if got := normalizeZinIssue(input); got != "123" {
+			t.Errorf("normalizeZinIssue(%q) = %q, want 123", input, got)
+		}
+	}
+}
