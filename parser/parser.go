@@ -2,7 +2,9 @@ package parser
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -10,6 +12,26 @@ import (
 type ZinSong struct {
 	Prefix   string // 例如 "#123", "#MM114(2027/7月)" 等，可為空
 	SongName string // 清理後的歌名
+}
+
+// ProgramTrack 代表 program-import-v1 中的一首教材歌曲。
+type ProgramTrack struct {
+	Sequence        int
+	SongName        string
+	Artist          string
+	BPM             int
+	DurationSeconds int
+	Style           string
+}
+
+// ProgramImport 代表一份可匯入的 ZIN 或 Mega Mix 教材。
+type ProgramImport struct {
+	FormatVersion int
+	Type          string
+	Issue         string
+	ReleaseMonth  string
+	Title         string
+	Tracks        []ProgramTrack
 }
 
 var (
@@ -131,6 +153,154 @@ func ParseZinInput(input string) (month string, albumName string, description st
 	return month, albumName, description, songs, nil
 }
 
+// ParseProgramImport 解析 program-import-v1 固定教材格式。
+func ParseProgramImport(input string) (*ProgramImport, error) {
+	result := &ProgramImport{}
+	inTracks := false
+
+	for lineNumber, rawLine := range strings.Split(input, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "/") || strings.HasPrefix(line, "```") {
+			continue
+		}
+
+		if line == "TRACKS:" {
+			inTracks = true
+			continue
+		}
+
+		if !inTracks {
+			key, value, found := strings.Cut(line, ":")
+			if !found {
+				return nil, fmt.Errorf("line %d: invalid header %q", lineNumber+1, line)
+			}
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			switch key {
+			case "FORMAT_VERSION":
+				version, err := strconv.Atoi(value)
+				if err != nil {
+					return nil, fmt.Errorf("line %d: invalid FORMAT_VERSION", lineNumber+1)
+				}
+				result.FormatVersion = version
+			case "TYPE":
+				result.Type = strings.ToUpper(value)
+			case "ISSUE":
+				result.Issue = value
+			case "RELEASE_MONTH":
+				result.ReleaseMonth = value
+			case "TITLE":
+				result.Title = value
+			default:
+				return nil, fmt.Errorf("line %d: unknown header %q", lineNumber+1, key)
+			}
+			continue
+		}
+
+		fields := splitProgramTrackFields(line)
+		if len(fields) != 6 {
+			return nil, fmt.Errorf("line %d: track must contain 6 fields", lineNumber+1)
+		}
+		for i := range fields {
+			fields[i] = strings.TrimSpace(fields[i])
+		}
+
+		sequence, err := strconv.Atoi(fields[0])
+		if err != nil || sequence < 1 {
+			return nil, fmt.Errorf("line %d: invalid track sequence", lineNumber+1)
+		}
+		if sequence != len(result.Tracks)+1 {
+			return nil, fmt.Errorf("line %d: expected track sequence %02d", lineNumber+1, len(result.Tracks)+1)
+		}
+		if fields[1] == "" {
+			return nil, fmt.Errorf("line %d: song name is required", lineNumber+1)
+		}
+
+		bpm := 0
+		if fields[3] != "" {
+			bpm, err = strconv.Atoi(fields[3])
+			if err != nil || bpm < 1 {
+				return nil, fmt.Errorf("line %d: invalid BPM", lineNumber+1)
+			}
+		}
+
+		durationSeconds, err := parseDuration(fields[4])
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNumber+1, err)
+		}
+
+		result.Tracks = append(result.Tracks, ProgramTrack{
+			Sequence:        sequence,
+			SongName:        CleanSongName(fields[1]),
+			Artist:          fields[2],
+			BPM:             bpm,
+			DurationSeconds: durationSeconds,
+			Style:           fields[5],
+		})
+	}
+
+	if result.FormatVersion != 1 {
+		return nil, errors.New("FORMAT_VERSION must be 1")
+	}
+	if result.Type != "ZIN" && result.Type != "MM" {
+		return nil, errors.New("TYPE must be ZIN or MM")
+	}
+	if result.Issue == "" {
+		return nil, errors.New("ISSUE is required")
+	}
+	if len(result.Tracks) == 0 {
+		return nil, errors.New("at least one track is required")
+	}
+	if result.Title == "" {
+		if result.Type == "MM" {
+			result.Title = "Mega Mix " + result.Issue
+		} else {
+			result.Title = "ZIN " + result.Issue
+		}
+	}
+
+	return result, nil
+}
+
+// splitProgramTrackFields 允許欄位內容使用 \| 表示字面上的直線符號。
+func splitProgramTrackFields(line string) []string {
+	var fields []string
+	var field strings.Builder
+	for i := 0; i < len(line); i++ {
+		if line[i] == '\\' && i+1 < len(line) && line[i+1] == '|' {
+			field.WriteByte('|')
+			i++
+			continue
+		}
+		if line[i] == '|' {
+			fields = append(fields, field.String())
+			field.Reset()
+			continue
+		}
+		field.WriteByte(line[i])
+	}
+	return append(fields, field.String())
+}
+
+func parseDuration(value string) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return 0, errors.New("duration must use M:SS")
+	}
+	minutes, err := strconv.Atoi(parts[0])
+	if err != nil || minutes < 0 {
+		return 0, errors.New("invalid duration minutes")
+	}
+	seconds, err := strconv.Atoi(parts[1])
+	if err != nil || seconds < 0 || seconds > 59 {
+		return 0, errors.New("invalid duration seconds")
+	}
+	return minutes*60 + seconds, nil
+}
+
 // LevenshteinDistance 計算兩個 []rune 之間的編輯距離 (適用於中英文 Unicode)
 func LevenshteinDistance(s, t []rune) int {
 	d := make([][]int, len(s)+1)
@@ -152,9 +322,9 @@ func LevenshteinDistance(s, t []rune) int {
 				cost = 1
 			}
 			d[i][j] = minInt(
-				d[i-1][j]+1,      // deletion
+				d[i-1][j]+1, // deletion
 				minInt(
-					d[i][j-1]+1,  // insertion
+					d[i][j-1]+1,      // insertion
 					d[i-1][j-1]+cost, // substitution
 				),
 			)
