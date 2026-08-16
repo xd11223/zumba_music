@@ -489,25 +489,9 @@ func (b *ZumbaBot) formatQueryProgramResult(userID int64, programType, issue str
 	for _, track := range result.Tracks {
 		status := "⬜ 未使用"
 		if track.Used {
-			status = "✅ 使用中"
+			status = "✅ 已使用"
 		}
 		sb.WriteString(fmt.Sprintf("%02d. <b>%s</b>　%s\n", track.Sequence, html.EscapeString(track.DisplayName), status))
-		var metadata []string
-		if track.Artist != "" {
-			metadata = append(metadata, "🎤 "+html.EscapeString(track.Artist))
-		}
-		if track.BPM > 0 {
-			metadata = append(metadata, fmt.Sprintf("⚡ %d BPM", track.BPM))
-		}
-		if track.DurationSeconds > 0 {
-			metadata = append(metadata, "⏱ "+formatDuration(track.DurationSeconds))
-		}
-		if track.Style != "" {
-			metadata = append(metadata, "🏷 "+html.EscapeString(track.Style))
-		}
-		if len(metadata) > 0 {
-			sb.WriteString("    " + strings.Join(metadata, " | ") + "\n")
-		}
 		if len(track.History) > 0 {
 			history := make([]string, len(track.History))
 			for i, item := range track.History {
@@ -517,10 +501,6 @@ func (b *ZumbaBot) formatQueryProgramResult(userID int64, programType, issue str
 		}
 	}
 	return sb.String()
-}
-
-func formatDuration(totalSeconds int) string {
-	return fmt.Sprintf("%d:%02d", totalSeconds/60, totalSeconds%60)
 }
 
 // cmdListZin 列出所有 ZIN 教材並附帶內嵌按鈕
